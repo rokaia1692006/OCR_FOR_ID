@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Egyptian ID OCR</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: monospace;
+      background: #fff;
+      color: #000;
+      padding: 3rem 1rem;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    h1 { font-size: 1.2rem; margin-bottom: 0.25rem; }
+    p.subtitle { font-size: 0.8rem; color: #555; margin-bottom: 2rem; }
+
+    .upload-zone {
+      border: 1px solid #000;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      position: relative;
+      margin-bottom: 1rem;
+    }
+
+    .upload-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    .upload-zone p { font-size: 0.85rem; }
+
+    #preview {
+      display: none;
+      max-width: 100%;
+      max-height: 180px;
+      object-fit: contain;
+      border: 1px solid #ccc;
+      margin-bottom: 1rem;
+    }
+
+    button {
+      width: 100%;
+      padding: 0.6rem;
+      background: #000;
+      color: #fff;
+      border: none;
+      font-family: monospace;
+      font-size: 0.9rem;
+      cursor: pointer;
+      margin-bottom: 1.5rem;
+    }
+
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .spinner { display: none; font-size: 0.85rem; margin-bottom: 1rem; }
+
+    .results { display: none; }
+
+    .result-row {
+      border-top: 1px solid #eee;
+      padding: 0.75rem 0;
+    }
+
+    .result-label {
+      font-size: 0.7rem;
+      color: #888;
+      display: block;
+      margin-bottom: 0.2rem;
+    }
+
+    .result-value {
+      font-size: 1rem;
+      font-weight: bold;
+    }
+
+    .meta {
+      font-size: 0.7rem;
+      color: #aaa;
+      margin-top: 0.75rem;
+    }
+
+    .error-box {
+      display: none;
+      border: 1px solid #000;
+      padding: 0.75rem;
+      font-size: 0.85rem;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Egyptian ID OCR</h1>
+  <p class="subtitle">Upload an ID image to extract name and national number</p>
+
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" id="fileInput" accept="image/*">
+    <p>Drag & drop or <span style="text-decoration:underline">browse</span> to upload</p>
+    <p style="margin-top:0.3rem;font-size:0.7rem;color:#888">JPG, PNG, WEBP supported</p>
+  </div>
+
+  <img id="preview" alt="preview">
+
+  <button id="submitBtn" disabled>Extract ID Data</button>
+
+  <div class="spinner" id="spinner">Processing...</div>
+
+  <div class="results" id="results">
+    <div class="result-row">
+      <span class="result-label">National ID Number</span>
+      <span class="result-value" id="outID">—</span>
+    </div>
+    <div class="result-row">
+      <span class="result-label">Full Name</span>
+      <span class="result-value" id="outName" style="font-size:1.1rem">—</span>
+    </div>
+    <p class="meta" id="outTime"></p>
+  </div>
+
+  <div class="error-box" id="errorBox"></div>
+
+<script>
+  const fileInput  = document.getElementById('fileInput');
+  const preview    = document.getElementById('preview');
+  const submitBtn  = document.getElementById('submitBtn');
+  const spinner    = document.getElementById('spinner');
+  const results    = document.getElementById('results');
+  const errorBox   = document.getElementById('errorBox');
+  const uploadZone = document.getElementById('uploadZone');
+
+  uploadZone.addEventListener('dragover', e => e.preventDefault());
+  uploadZone.addEventListener('drop', e => {
+    e.preventDefault();
+    if (e.dataTransfer.files[0]) {
+      fileInput.files = e.dataTransfer.files;
+      handleFile(e.dataTransfer.files[0]);
+    }
+  });
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
+
+  function handleFile(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+    submitBtn.disabled     = false;
+    results.style.display  = 'none';
+    errorBox.style.display = 'none';
+  }
+
+  submitBtn.addEventListener('click', async () => {
+    if (!fileInput.files[0]) return;
+    submitBtn.disabled     = true;
+    spinner.style.display  = 'block';
+    results.style.display  = 'none';
+    errorBox.style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    try {
+      const res  = await fetch('/extract', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Extraction failed.');
+
+      document.getElementById('outID').textContent   = data.nationalId || 'Not detected';
+      document.getElementById('outName').textContent = data.name       || 'Not detected';
+      document.getElementById('outTime').textContent = 'Processed in ' + data.processing_time_seconds + 's';
+      results.style.display = 'block';
+    } catch (err) {
+      errorBox.textContent   = err.message;
+      errorBox.style.display = 'block';
+    } finally {
+      spinner.style.display = 'none';
+      submitBtn.disabled    = false;
+    }
+  });
+</script>
+</body>
+</html>

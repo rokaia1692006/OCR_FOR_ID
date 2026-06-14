@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+paddlepaddle
+paddleocr
+opencv-contrib-python-headless
+rembg
+Pillow
+numpy
+easyocr
+python-multipart
