@@ -25,11 +25,11 @@ app.add_middleware(
     allow_headers=["*"]
 )
 ocr = PaddleOCR(
-    use_textline_orientation=False,
-    use_doc_orientation_classify=False,
-    use_doc_unwarping=False,
-    text_detection_model_name="PP-OCRv5_mobile_det",
-    text_recognition_model_name="arabic_PP-OCRv5_mobile_rec",
+    use_angle_cls=False,
+    lang='ar',
+    use_gpu=False,
+    show_log=False,
+   
 )
 reader = easyocr.Reader(['ar', 'en'], gpu=False)
 def findBESTCardContour(imagname, filePath):
