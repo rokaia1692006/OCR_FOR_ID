@@ -16,7 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import io
 from rembg import remove
 from PIL import Image
-from paddleocr import TextDetection
 app = FastAPI(title="ID OCR")
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +28,6 @@ ocr = PaddleOCR(
     lang='ar',
     use_gpu=False,
     show_log=False,
-   
 )
 reader = easyocr.Reader(['ar', 'en'], gpu=False)
 def findBESTCardContour(imagname, filePath):
@@ -237,60 +235,54 @@ def makeImageBetter(image):
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
     return gray
-# function to detect + read text based on input 
-# returnValue = true -> returns ocr text list for GetText
-# returnValue = false -> just the boxes on the image 
+
 def textDetection(image, returnValue=False):
-    # extra padding ratio
     HpaddingRatio = 0.3
     topPaddingRatio = 0.6
-    # make sure image is greyscale
+
     if len(image.shape) == 2:
         outImg = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
         imageBGR = outImg.copy()
     else:
         outImg = image.copy()
         imageBGR = image
-    # imgH + imgW 
+
     imgH, imgW = image.shape[:2]
-    # get text on image
-    result = ocr.predict(imageBGR)
+
+    raw = ocr.ocr(imageBGR, cls=False)
+
     boxes = []
     texts = []
 
-    for res in result:
-        # get polygon points by ocr
-        # with fallback
-        polys = res.get('dt_polys', res['rec_polys'])
-        # loop through all the Results and print text + SCORE
-        for text, score, poly in zip(res['rec_texts'], res['rec_scores'], polys):
-            
+    for page in raw:
+        if page is None:
+            continue
+        for line in page:
+            box, (text, score) = line
             print(f"{text}  (conf: {score:.2f})")
             texts.append(text)
-            # covert to float32 arr
-            pts = poly.astype(int) if hasattr(poly, 'astype') else np.array(poly, dtype=int)
-            # get box + add padding
+
+            pts = np.array(box, dtype=int)
             xmin = int(min(p[0] for p in pts))
             ymin = int(min(p[1] for p in pts))
             xmax = int(max(p[0] for p in pts))
             ymax = int(max(p[1] for p in pts))
-            boxHieght = ymax - ymin
-            topPadding = int(boxHieght * topPaddingRatio)
-            bottom_pad = int(boxHieght * HpaddingRatio)
-            #expand box vertically ( there were some errors where it cropped top part of the image)
+
+            boxHeight = ymax - ymin
+            topPadding = int(boxHeight * topPaddingRatio)
+            bottom_pad = int(boxHeight * HpaddingRatio)
             ymin = max(0, ymin - topPadding)
             ymax = min(imgH, ymax + bottom_pad)
 
             cv2.rectangle(outImg, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
-            # put the box -> array of boxes 
             boxes.append(np.array([
                 [xmin, ymin],
                 [xmax, ymin],
                 [xmax, ymax],
                 [xmin, ymax]
             ], dtype=np.float32))
-    # return based on input
-    show_img("All Boxes)", outImg)
+
+    show_img("All Boxes", outImg)
     if returnValue:
         return outImg, boxes, texts
     return outImg, boxes
