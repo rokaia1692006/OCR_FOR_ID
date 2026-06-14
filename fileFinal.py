@@ -4,8 +4,7 @@ import os
 import sys
 import time
 from PIL import Image
-import pytesseract
-from pytesseract import Output
+import tempfile
 import easyocr
 import re
 import matplotlib.pyplot as plt
