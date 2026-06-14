@@ -128,11 +128,7 @@ national IDs are sensitive PII. The following measures are applied:
 
 ---
 
-## Deployment
 
-The app is deployed on Railway. See the live demo at:
-`https://yourapp.up.railway.app`
----
 
 ## Dependencies
 - PaddleOCR + PaddlePaddle 
