@@ -4,7 +4,7 @@ paddlepaddle
 paddleocr
 easyocr
 opencv-contrib-python-headless
-rembg
+rembg[cpu]
 Pillow
 numpy
 python-multipart
