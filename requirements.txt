@@ -3,9 +3,9 @@ uvicorn
 paddlepaddle==2.6.2
 paddleocr==2.7.3
 easyocr
-opencv-contrib-python-headless
+opencv-python-headless==4.9.0.80
 rembg[cpu]
 Pillow
-numpy
+numpy==1.26.4
 python-multipart
 matplotlib
