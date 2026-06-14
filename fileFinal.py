@@ -3,9 +3,11 @@ import numpy as np
 import os
 import sys
 import time
-from PIL import Image
 import tempfile
-
+from PIL import Image
+import pytesseract
+from pytesseract import Output
+import easyocr
 import re
 import matplotlib.pyplot as plt
 from paddleocr import PaddleOCR
@@ -16,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import io
 from rembg import remove
 from PIL import Image
+from paddleocr import TextDetection
 app = FastAPI(title="ID OCR")
 app.add_middleware(
     CORSMiddleware,
@@ -23,36 +26,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
-_ocr = None
-_rembg_remove = None
- 
-MAX_SIDE = 1600 
-def get_ocr():
-    global _ocr
-    if _ocr is None:
-        from paddleocr import PaddleOCR
-        _ocr = PaddleOCR(
-            use_angle_cls=False,
-            lang='ar',
-            use_gpu=False,
-            show_log=False,
-        )
-    return _ocr
-def get_rembg():
-    global _rembg_remove
-    if _rembg_remove is None:
-        from rembg import remove
-        _rembg_remove = remove
-    return _rembg_remove
- 
-
-
+ocr = PaddleOCR(use_textline_orientation=True, lang='ar')
+reader = easyocr.Reader(['ar', 'en'], gpu=False)
 def findBESTCardContour(imagname, filePath):
     # background removal
     # i noticed that it works better on an id with no background
-    remove_fn = get_rembg()
     inputImage = Image.open(filePath)
-    noBG = remove_fn(inputImage)
+    noBG = remove(inputImage)
     noBG = np.array(noBG) 
     show_img("no background", noBG)
 
@@ -91,7 +71,7 @@ def findBESTCardContour(imagname, filePath):
     ker = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     fgcrop = filledmask[y0:y1, x0:x1]
     candidates = [fgcrop]
-    
+
 # Otsu 
     _, Maskotso = cv2.threshold(sat,0,255,cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     candidates.append(Maskotso)
@@ -169,7 +149,7 @@ def PerspectiveTransform(imagname,filePath):
         bottomL = points[np.argmax(diff)]
         #arrange in order
         orderP = np.array([topL, topR, bottomR, bottomL], dtype = "float32")
-       
+
         windthMBE = np.linalg.norm(bottomR - bottomL)
         windthMTE = np.linalg.norm(topR - topL)
         maxWidth = max(int(windthMBE), int(windthMTE))
@@ -251,58 +231,62 @@ def makeImageBetter(image):
     if max(h, w) < 1000:
         scale = 1.5
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    if max(h,w)>MAX_SIDE:
-        scale = 0.7
-        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    return gray
 
+    return gray
+# function to detect + read text based on input 
+# returnValue = true -> returns ocr text list for GetText
+# returnValue = false -> just the boxes on the image 
 def textDetection(image, returnValue=False):
+    # extra padding ratio
     HpaddingRatio = 0.3
     topPaddingRatio = 0.6
-
+    # make sure image is greyscale
     if len(image.shape) == 2:
         outImg = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
         imageBGR = outImg.copy()
     else:
         outImg = image.copy()
         imageBGR = image
-
+    # imgH + imgW 
     imgH, imgW = image.shape[:2]
-    ocr = get_ocr()
-    raw = ocr.ocr(imageBGR, cls=False)
-
+    # get text on image
+    result = ocr.predict(imageBGR)
     boxes = []
     texts = []
 
-    for page in raw:
-        if page is None:
-            continue
-        for line in page:
-            box, (text, score) = line
+    for res in result:
+        # get polygon points by ocr
+        # with fallback
+        polys = res.get('dt_polys', res['rec_polys'])
+        # loop through all the Results and print text + SCORE
+        for text, score, poly in zip(res['rec_texts'], res['rec_scores'], polys):
+
             print(f"{text}  (conf: {score:.2f})")
             texts.append(text)
-
-            pts = np.array(box, dtype=int)
+            # covert to float32 arr
+            pts = poly.astype(int) if hasattr(poly, 'astype') else np.array(poly, dtype=int)
+            # get box + add padding
             xmin = int(min(p[0] for p in pts))
             ymin = int(min(p[1] for p in pts))
             xmax = int(max(p[0] for p in pts))
             ymax = int(max(p[1] for p in pts))
-
-            boxHeight = ymax - ymin
-            topPadding = int(boxHeight * topPaddingRatio)
-            bottom_pad = int(boxHeight * HpaddingRatio)
+            boxHieght = ymax - ymin
+            topPadding = int(boxHieght * topPaddingRatio)
+            bottom_pad = int(boxHieght * HpaddingRatio)
+            #expand box vertically ( there were some errors where it cropped top part of the image)
             ymin = max(0, ymin - topPadding)
             ymax = min(imgH, ymax + bottom_pad)
 
             cv2.rectangle(outImg, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
+            # put the box -> array of boxes 
             boxes.append(np.array([
                 [xmin, ymin],
                 [xmax, ymin],
                 [xmax, ymax],
                 [xmin, ymax]
             ], dtype=np.float32))
-
-    show_img("All Boxes", outImg)
+    # return based on input
+    show_img("All Boxes)", outImg)
     if returnValue:
         return outImg, boxes, texts
     return outImg, boxes
@@ -408,7 +392,7 @@ def getName(fullTXT, groupedTXT):
     if headeridxGrouped is not None:
         for text in groupedTXT[headeridxGrouped + 1:]:
             clean = text.strip()
-           
+
             if re.search(r'\d', clean):
                 break
             nameLines.append(clean)
@@ -506,7 +490,7 @@ def main(image_paths):
             "nationalId": ID, 
             "name": Name})
     return results
-     
+
 
 
 @app.post("/extract")
