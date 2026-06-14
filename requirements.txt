@@ -2,7 +2,6 @@ fastapi
 uvicorn
 paddlepaddle==2.6.2
 paddleocr==2.7.3
-easyocr
 opencv-python-headless==4.9.0.80
 rembg[cpu]
 Pillow

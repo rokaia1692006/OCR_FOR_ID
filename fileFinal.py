@@ -5,7 +5,7 @@ import sys
 import time
 from PIL import Image
 import tempfile
-import easyocr
+
 import re
 import matplotlib.pyplot as plt
 from paddleocr import PaddleOCR
@@ -23,18 +23,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
-ocr = PaddleOCR(
-    use_angle_cls=False,
-    lang='ar',
-    use_gpu=False,
-    show_log=False,
-)
-reader = easyocr.Reader(['ar', 'en'], gpu=False)
+_ocr = None
+_rembg_remove = None
+ 
+MAX_SIDE = 1600 
+def get_ocr():
+    global _ocr
+    if _ocr is None:
+        from paddleocr import PaddleOCR
+        _ocr = PaddleOCR(
+            use_angle_cls=False,
+            lang='ar',
+            use_gpu=False,
+            show_log=False,
+        )
+    return _ocr
+def get_rembg():
+    global _rembg_remove
+    if _rembg_remove is None:
+        from rembg import remove
+        _rembg_remove = remove
+    return _rembg_remove
+ 
+
+
 def findBESTCardContour(imagname, filePath):
     # background removal
     # i noticed that it works better on an id with no background
+    remove_fn = get_rembg()
     inputImage = Image.open(filePath)
-    noBG = remove(inputImage)
+    noBG = remove_fn(inputImage)
     noBG = np.array(noBG) 
     show_img("no background", noBG)
 
@@ -233,7 +251,9 @@ def makeImageBetter(image):
     if max(h, w) < 1000:
         scale = 1.5
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-
+    if max(h,w)>MAX_SIDE:
+        scale = 0.7
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     return gray
 
 def textDetection(image, returnValue=False):
@@ -248,7 +268,7 @@ def textDetection(image, returnValue=False):
         imageBGR = image
 
     imgH, imgW = image.shape[:2]
-
+    ocr = get_ocr()
     raw = ocr.ocr(imageBGR, cls=False)
 
     boxes = []
