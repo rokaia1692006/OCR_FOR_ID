@@ -1,7 +1,7 @@
 fastapi
 uvicorn
-paddlepaddle
-paddleocr
+paddleocr==3.7.0
+paddlepaddle==3.7.0
 easyocr
 opencv-contrib-python-headless
 rembg[cpu]
