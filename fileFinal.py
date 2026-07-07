@@ -4,10 +4,8 @@ import os
 import sys
 import time
 import tempfile
+import logging
 from PIL import Image
-import pytesseract
-from pytesseract import Output
-import easyocr
 import re
 import matplotlib.pyplot as plt
 from paddleocr import PaddleOCR
@@ -19,15 +17,30 @@ import io
 from rembg import remove
 from PIL import Image
 from paddleocr import TextDetection
-app = FastAPI(title="ID OCR")
+
+# logging 
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("id_ocr")
+
+app = FastAPI(
+    title="ID OCR",
+    description="Extracts the holder's name and 14-digit national ID number from photos of Egyptian national ID cards.",
+    version="1.0.0",
+)
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"]
 )
-ocr = PaddleOCR(use_textline_orientation=True, lang='ar')
-reader = easyocr.Reader(['ar', 'en'], gpu=False)
+logger.info("Loading PaddleOCR model...")
+ocr = PaddleOCR(use_textline_orientation=True, lang='ar', enable_mkldnn=False)
+logger.info("Models loaded successfully.")
 def findBESTCardContour(imagname, filePath):
     # background removal
     # i noticed that it works better on an id with no background
@@ -48,6 +61,7 @@ def findBESTCardContour(imagname, filePath):
 
     fgcontours, _ = cv2.findContours(fgmask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not fgcontours:
+        logger.warning("No foreground contours found during background removal.")
         return None
 
     largestfg = max(fgcontours, key=cv2.contourArea)
@@ -103,6 +117,7 @@ def findBESTCardContour(imagname, filePath):
                     quads.append((approx, area, aspect))
                     break
     if not quads:
+        logger.warning("No 4-point quadrilateral candidates found for the card.")
         return None
 # cascade of filters to find best Candidate
 # strict to loose
@@ -176,7 +191,7 @@ def PerspectiveTransform(imagname,filePath):
         show_img("Warped", NewIMG)
         return NewIMG
     else:
-        print("NOT ENOUGH EDGES")
+        logger.warning("NOT ENOUGH EDGES")
         return None
 NOTEBOOK_MODE = False 
 #function to visualize in notebook 
@@ -261,7 +276,7 @@ def textDetection(image, returnValue=False):
         # loop through all the Results and print text + SCORE
         for text, score, poly in zip(res['rec_texts'], res['rec_scores'], polys):
 
-            print(f"{text}  (conf: {score:.2f})")
+            logger.debug(f"{text}  (conf: {score:.2f})")
             texts.append(text)
             # covert to float32 arr
             pts = poly.astype(int) if hasattr(poly, 'astype') else np.array(poly, dtype=int)
@@ -315,14 +330,17 @@ def getOrientationFromText(boxes):
 
     #median angle of all 
     orientation = np.median(angles)
-    print("Detected orientation:", orientation)
+    logger.debug(f"Detected orientation: {orientation}")
     return orientation
 def correctImageUsingTEXT(image):
-    output_image, boxes = textDetection(image)
+    # keep the pre-rotation OCR pass too: on some images the orientation
+    # guess is wrong and rotating actually destroys a perfectly good read,
+    # so main() can fall back to this pass instead of the rotated one
+    output_image, boxes, texts = textDetection(image, returnValue=True)
     angle = getOrientationFromText(boxes)
     finalImage = rotatImage(image, angle)
     show_img("Corrected OCR", finalImage)
-    return finalImage
+    return finalImage, texts, boxes
 
 # OCR on image -> return list of text + boxes 
 def getText(image):
@@ -465,61 +483,90 @@ def nameValidation(name):
         return name.strip()
     return None
 def main(image_paths):
+    debug_dump = os.environ.get("DEBUG_DUMP", "0") == "1"
     results = []
     for path in image_paths:
         raw = cv2.imread(path)
         if raw is None:
-            print(f"Could not read image: {path}")
+            logger.error(f"Could not read image: {path}")
             results.append({"path": path, "error": "could not read image"})
             continue
         warped = PerspectiveTransform(raw, path)
         if warped is None:
-            print("Perspective transform failed")
+            logger.warning("Perspective transform failed")
             warped = raw
+        if debug_dump:
+            cv2.imwrite("/tmp/debug_1_warped.jpg", warped)
         prepped   = makeImageBetter(warped)
-        corrected = correctImageUsingTEXT(prepped)
-        fullTXT, boxes = getText(corrected)
-        fullTXT    = [CleanText(t) for t in fullTXT]
-        fullTXT    = [t for t in fullTXT if t]
-        groupedTXT = groupTextByLine(fullTXT, boxes, y_threshold=25)
-        ID   = extractIDFromText(fullTXT)
-        Name = nameValidation(getName(fullTXT, groupedTXT))
-        print(f"ID:   {ID}")
-        print(f"NAME: {Name}")
+        if debug_dump:
+            cv2.imwrite("/tmp/debug_2_prepped.jpg", prepped)
+        corrected, firstPassTXT, firstPassBoxes = correctImageUsingTEXT(prepped)
+        if debug_dump:
+            cv2.imwrite("/tmp/debug_3_corrected.jpg", corrected)
+        firstClean   = [CleanText(t) for t in firstPassTXT]
+        firstClean   = [t for t in firstClean if t]
+        firstGrouped = groupTextByLine(firstClean, firstPassBoxes, y_threshold=25)
+        firstID      = extractIDFromText(firstClean)
+        firstName    = nameValidation(getName(firstClean, firstGrouped))
+
+        if firstID or firstName:
+            logger.info("Using pre-rotation OCR pass (rotation was unnecessary or would have hurt accuracy).")
+            fullTXT, ID, Name = firstClean, firstID, firstName
+        else:
+            logger.info("Pre-rotation pass found nothing usable, falling back to rotated OCR pass.")
+            fullTXT, boxes = getText(corrected)
+            logger.info(f"Raw OCR tokens before cleaning: {fullTXT}")
+            fullTXT    = [CleanText(t) for t in fullTXT]
+            fullTXT    = [t for t in fullTXT if t]
+            groupedTXT = groupTextByLine(fullTXT, boxes, y_threshold=25)
+            ID   = extractIDFromText(fullTXT)
+            Name = nameValidation(getName(fullTXT, groupedTXT))
+
+        logger.info(f"ID:   {ID}")
+        logger.info(f"NAME: {Name}")
         results.append({
             "nationalId": ID, 
             "name": Name})
     return results
 
 
+@app.get("/health")
+async def health():
+        return {"status": "ok"}
 
 @app.post("/extract")
 async def extract(file: UploadFile = File(...)):
     if not file.content_type.startswith("image/"):
+        logger.warning(f"Rejected upload with content_type={file.content_type}")
         return JSONResponse(status_code=400, content={"success": False, "error": "File must be an image."})
 
     start     = time.time()
-    contents  = await file.read()
-    pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
-    image_np  = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-
-    # temp file
-    tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+    tmp       = None
     try:
+        contents  = await file.read()
+        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+        image_np  = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+        # temp file
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
         cv2.imwrite(tmp.name, image_np)
         tmp.close()
         results = main([tmp.name])
+
+        result = results[0] if results else {}
+        return JSONResponse({
+            "success":    True,
+            "nationalId": result.get("nationalId"),
+            "name":       result.get("name"),
+            "processing_time_seconds": round(time.time() - start, 2),
+        })
+    except Exception as e:
+        logger.exception("Unexpected error while processing /extract request")
+        return JSONResponse(status_code=500, content={"success": False, "error": "Internal server error while processing the image."})
     finally:
         # delete tmp file
-        os.remove(tmp.name)  
-
-    result = results[0] if results else {}
-    return JSONResponse({
-        "success":    True,
-        "nationalId": result.get("nationalId"),
-        "name":       result.get("name"),
-        "processing_time_seconds": round(time.time() - start, 2),
-    })
+        if tmp is not None and os.path.exists(tmp.name):
+            os.remove(tmp.name)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
@@ -529,5 +576,5 @@ async def serve_ui():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8080))
     uvicorn.run("fileFinal:app", host="0.0.0.0", port=port, reload=False)

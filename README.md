@@ -39,6 +39,7 @@ jobtrailOCR/
 ├── fileFinal.py
 ├── requirements.txt
 ├── Dockerfile
+├── start.sh
 ├── static/
 │   └── frontEnd.html
 └── imagesToTest/
@@ -49,13 +50,34 @@ jobtrailOCR/
 ```bash
 python fileFinal.py
 ```
-Then open localhost in your browser
+Then open localhost in your browser, or `/docs` for the interactive Swagger UI.
 
 ### 6. Run inference directly (no server)
 use ocrNoteBook.ipynb
 ---
+## Run with Docker
+```bash
+docker build -t id-ocr .
+docker run -p 8080:8080 -e ENABLE_TUNNEL=0 id-ocr
+```
+By default the container also opens a **Cloudflare Quick Tunnel** (via `cloudflared`) so the service is reachable over a temporary public HTTPS URL.
 
+Environment variables:
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8080` | Port uvicorn binds to |
+| `ENABLE_TUNNEL` | `1` | Start a Cloudflare Quick Tunnel alongside the API |
+| `LOG_LEVEL` | `INFO` | Python logging level (set to `DEBUG` to see per-token OCR confidences) |
+
+---
 ## API
+Interactive docs: **`/docs`** (Swagger) and **`/redoc`**.
+
+### GET /health
+Simple liveness/readiness check.
+```json
+{ "status": "ok" }
+```
 
 ### POST  + extract
 
@@ -72,7 +94,7 @@ Response:
   "processing_time_seconds": 4.2
 }
 ```
-
+On failure, the response uses the same envelope with `"success": false` and an `"error"` message, returned with a `400` (bad/non-image upload) or `500` (unexpected processing error) status code.
 ---
 
 ## Pipeline
@@ -101,7 +123,8 @@ Response:
 - `nameValidation` verifies the extracted name contains only Arabic characters
 
 ---
-
+## Logging
+The app logs to stdout via Python's standard `logging` module (level controlled by the `LOG_LEVEL` env var, default `INFO`). Model loading, contour-detection fallbacks, perspective-transform failures, and each request's final ID/name result are logged; unexpected exceptions in `/extract` are logged with a full traceback and turned into a clean `500` JSON response instead of crashing the server.
 ## Post Processing and Validation
 
 ### ID Number
